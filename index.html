@@ -121,6 +121,13 @@ footer{padding:16px 16px 100px;font-size:12px;color:var(--muted);line-height:1.5
 footer a{color:var(--navy)}
 .srOnly{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .pend{border-left:0}
+.badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:99px;background:var(--soft);color:var(--muted);margin-left:6px;vertical-align:1px}
+.badge.ok{background:#E3F2E5;color:var(--green-ink)}
+.it.tap{cursor:pointer;width:100%;border:0;border-bottom:1px solid var(--line);background:#fff;font:inherit;color:inherit;text-align:left}
+.it.tap:hover{background:#F8FAFC}
+.chart svg{display:block;width:100%;height:auto}
+.wk{display:grid;grid-template-columns:78px 1fr auto;gap:6px 10px;align-items:center;font-size:14px}
+.wk .bar{height:12px}
 </style>
 </head>
 <body>
@@ -348,6 +355,47 @@ function calcMes(){
   r.diferencia = r.desp + r.sinExp;
   return r;
 }
+// Ventas día por día del mes activo (solo lo cobrado)
+var DIAS_SEM = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+function fechaObj(iso){ var p = iso.split("-"); return new Date(+p[0], +p[1]-1, +p[2]); }
+function calcDias(){
+  var porDia = {};
+  D.ventas.forEach(function(t){
+    if (t.estado === "pendiente") return;
+    var d = porDia[t.fecha] || (porDia[t.fecha] = {fecha:t.fecha, total:0, tickets:0, unidades:0});
+    d.total += ticketTotal(t); d.tickets++; d.unidades += ticketUnidades(t);
+  });
+  var lista = Object.keys(porDia).sort().map(function(k){ return porDia[k]; });
+  var sem = [0,1,2,3,4,5,6].map(function(i){ return {dia:i, total:0, n:0}; });
+  lista.forEach(function(d){ var w = fechaObj(d.fecha).getDay(); sem[w].total += d.total; sem[w].n++; });
+  sem.forEach(function(w){ w.prom = w.n ? w.total / w.n : 0; });
+  var mejor = lista.slice().sort(function(a,b){ return b.total - a.total; })[0] || null;
+  var total = lista.reduce(function(a,d){ return a + d.total; }, 0);
+  var meta = CCRES && N(CCRES.peDia);
+  return {lista:lista, porDia:porDia, sem:sem, mejor:mejor, total:total, prom:lista.length ? total/lista.length : 0, meta:meta,
+    sobreMeta: meta ? lista.filter(function(d){ return d.total >= meta; }).length : null,
+    mejorSem: sem.filter(function(w){ return w.n; }).sort(function(a,b){ return b.prom - a.prom; })[0] || null};
+}
+function graficaDias(cd){
+  var y = +D.mes.slice(0,4), mo = +D.mes.slice(5,7), nd = new Date(y, mo, 0).getDate();
+  var W = 360, H = 190, l = 8, r = 8, t = 26, b = 22, bw = (W - l - r) / nd;
+  var max = Math.max(cd.meta || 0, cd.mejor ? cd.mejor.total : 0) * 1.12 || 1;
+  var Y = function(v){ return H - b - v / max * (H - t - b); };
+  var s = '<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Ventas por día de '+nombreMes(D.mes)+'">';
+  for (var i = 1; i <= nd; i++){
+    var iso = D.mes + "-" + String(i).padStart(2,"0"), d = cd.porDia[iso], v = d ? d.total : 0, x = l + (i-1) * bw;
+    var best = cd.mejor && d && d.fecha === cd.mejor.fecha, dom = fechaObj(iso).getDay() === 0;
+    if (v > 0) s += '<rect x="'+(x + bw*0.15).toFixed(1)+'" y="'+Y(v).toFixed(1)+'" width="'+(bw*0.7).toFixed(1)+'" height="'+(H - b - Y(v)).toFixed(1)+'" rx="2" fill="'+(best ? '#2E7D32' : '#5B7FA6')+'"><title>'+i+' · '+money(v)+'</title></rect>';
+    if (i === 1 || (i % 5 === 0 && nd - i >= 3) || i === nd) s += '<text x="'+(x + bw/2).toFixed(1)+'" y="'+(H - 6)+'" text-anchor="middle" font-size="10" fill="#5B6675">'+i+'</text>';
+    if (dom) s += '<rect x="'+(x + bw*0.3).toFixed(1)+'" y="'+(H - b + 3)+'" width="'+(bw*0.4).toFixed(1)+'" height="2" fill="#C9D2DC"/>';
+  }
+  s += '<line x1="'+l+'" y1="'+(H-b)+'" x2="'+(W-r)+'" y2="'+(H-b)+'" stroke="#C9D2DC"/>';
+  if (cd.meta){ s += '<line x1="'+l+'" y1="'+Y(cd.meta).toFixed(1)+'" x2="'+(W-r)+'" y2="'+Y(cd.meta).toFixed(1)+'" stroke="#B26A00" stroke-dasharray="4 3"/>'+
+    '<text x="'+(W-r)+'" y="'+(Y(cd.meta) - 4).toFixed(1)+'" text-anchor="end" font-size="10" font-weight="700" fill="#8A5300">Meta '+money(cd.meta)+'</text>'; }
+  if (cd.mejor){ var bi = +cd.mejor.fecha.slice(8,10), bx = l + (bi - 0.5) * bw, anchor = bi > nd*0.7 ? "end" : bi < nd*0.3 ? "start" : "middle";
+    s += '<text x="'+bx.toFixed(1)+'" y="'+Math.max(11, Y(cd.mejor.total) - 5).toFixed(1)+'" text-anchor="'+anchor+'" font-size="11" font-weight="800" fill="#1E5E24">'+money(cd.mejor.total)+'</text>'; }
+  return s + '</svg>';
+}
 function diasTranscurridos(){ var hoy = hoyISO(); if (mesDe(hoy) !== D.mes) return 30; return Math.max(1, +hoy.slice(8,10)); }
 function porAgotarse(){
   var r = calcMes(), dias = diasTranscurridos();
@@ -402,7 +450,7 @@ function render(){
     var out = vw();
     hdr.innerHTML = out.h; main.innerHTML = out.b;
     tabs.hidden = !!UI.sub || UI.tab === "clientes";
-    tabs.innerHTML = [["hoy","Hoy"],["vender","Vender"],["inventario","Inventario"],["mes","Mes"]].map(function(x){
+    tabs.innerHTML = [["hoy","Hoy"],["vender","Vender"],["inventario","Inventario"],["mes","Días"]].map(function(x){
       return '<button type="button" data-tab="'+x[0]+'"'+(UI.tab === x[0] && !UI.sub ? ' aria-current="page"' : '')+'>'+ICON[x[0]]+x[1]+'</button>'; }).join("");
   }
   if (k){ var el = document.querySelector(k); if (el){ el.focus(); try { if (pos != null) el.setSelectionRange(pos, pos); } catch(e){} } }
@@ -452,7 +500,7 @@ V.hoy = function(){
     return '<div class="it"><div>'+esc(resumenItems(t))+'<small>'+horaCorta(t.t)+' · '+esc(t.estado === "pendiente" ? "Pedido abierto" : t.pago)+(t.llevar ? ' · para llevar' : '')+(t.cliente ? ' · '+esc(t.cliente) : '')+'</small></div><div style="display:flex;gap:8px;align-items:center"><b>'+money(ticketTotal(t))+'</b><button class="btn sm del" type="button" data-anular="'+t.id+'" aria-label="Anular venta">Anular</button></div></div>'; }).join("")+'</div>';
   var cierre = (D.cierres || []).filter(function(c){ return c.fecha === hoy; }).pop();
   b += '<a class="btn go block" href="#" data-go-tab="vender">+ Registrar venta</a>'+
-    '<button class="btn ghost block" type="button" data-act="cerrarDia">'+(cierre ? 'Día cerrado · ver o rehacer el cierre' : 'Cerrar el día')+'</button>';
+    '<button class="btn ghost block" type="button" data-act="cerrarDia">'+(cierre ? 'Día cerrado · ver o rehacer el cierre' : 'Cerrar el día y enviar a Cuentas Claras')+'</button>';
   return {h:header(esc(nombreNegocio()), fechaLarga(hoy)), b:b};
 };
 function resumenItems(t){ return (t.items || []).map(function(it){ return it[1] + " " + (PLC[it[0]] ? PLC[it[0]].nombre : it[0]); }).join(", "); }
@@ -578,8 +626,23 @@ V.conteo = function(){
 
 // ---------- MES ----------
 V.mes = function(){
-  var r = calcMes();
-  var b = '<div class="card"><div class="k">Ventas de '+nombreMes(D.mes)+'</div><div class="big">'+money(r.ventasCaja)+'</div><div class="muted" style="font-size:14px">'+fN.format(r.unidades)+' productos · '+r.tickets+' ventas'+(IMP > 1 ? ' · sin impuesto: '+money(r.ventasNetas) : '')+'</div></div>';
+  var r = calcMes(), cd = calcDias(), hoy = hoyISO();
+  var b = '<div class="card"><div class="k">Ventas de '+nombreMes(D.mes)+'</div><div class="big">'+money(r.ventasCaja)+'</div><div class="muted" style="font-size:14px">'+cd.lista.length+(cd.lista.length === 1 ? ' día' : ' días')+' con ventas · promedio '+money(cd.prom)+' por día'+(IMP > 1 ? ' · sin impuesto: '+money(r.ventasNetas) : '')+'</div>'+
+    (cd.sobreMeta != null && cd.lista.length ? '<div style="font-size:13px;font-weight:700;margin-top:6px;color:'+(cd.sobreMeta >= cd.lista.length/2 ? 'var(--green-ink)' : '#8A5300')+'">'+cd.sobreMeta+' de '+cd.lista.length+' días superaron la meta diaria</div>' : '')+'</div>';
+  if (cd.lista.length){
+    b += '<div class="card chart"><h3>Ventas por día</h3>'+graficaDias(cd)+
+      (cd.mejor ? '<p style="margin:8px 0 0;font-size:14px">Mejor día: <b>'+esc(Mayus(DIAS_SEM[fechaObj(cd.mejor.fecha).getDay()]))+' '+(+cd.mejor.fecha.slice(8,10))+'</b> con <b>'+money(cd.mejor.total)+'</b> ('+cd.mejor.tickets+' ventas).</p>' : '')+'</div>';
+    var maxW = Math.max.apply(null, cd.sem.map(function(w){ return w.prom; })) || 1, orden = [1,2,3,4,5,6,0];
+    b += '<div class="card"><h3>Promedio por día de la semana</h3><div class="wk">'+orden.map(function(i){ var w = cd.sem[i], top = cd.mejorSem && cd.mejorSem.dia === i;
+      return '<span'+(top ? ' style="font-weight:800"' : '')+'>'+Mayus(DIAS_SEM[i])+'</span><div class="bar"><i style="width:'+(w.prom/maxW*100)+'%;background:'+(top ? 'var(--green)' : '#5B7FA6')+'"></i></div><span style="text-align:right;'+(top ? 'font-weight:800' : '')+'">'+(w.n ? money(w.prom) : '<span class="muted">—</span>')+'</span>'; }).join("")+'</div>'+
+      (cd.mejorSem ? '<p class="muted" style="margin:8px 0 0;font-size:13px">Los <b>'+DIAS_SEM[cd.mejorSem.dia]+'</b> son los que más venden en promedio. Úselo para planear compras, personal y promociones.</p>' : '')+'</div>';
+    b += '<div class="sec">Día por día</div><div class="list">'+cd.lista.slice().reverse().map(function(d){
+      var cierre = (D.cierres || []).some(function(c){ return c.fecha === d.fecha; });
+      return '<button type="button" class="it tap" data-dia="'+d.fecha+'"><span><b>'+esc(Mayus(DIAS_SEM[fechaObj(d.fecha).getDay()]))+' '+(+d.fecha.slice(8,10))+'</b>'+
+        (cierre ? '<span class="badge ok">Cerrado</span>' : d.fecha === hoy ? '<span class="badge">Hoy</span>' : '<span class="badge">Sin cierre</span>')+
+        '<small>'+d.tickets+' ventas · '+fN.format(d.unidades)+' productos</small></span><b'+(cd.meta && d.total >= cd.meta ? ' style="color:var(--green-ink)"' : '')+'>'+money(d.total)+'</b></button>'; }).join("")+'</div>';
+  } else b += '<p class="empty">Todavía no hay ventas cobradas este mes.</p>';
+  b += '<div class="sec" style="margin-top:8px">Inventario y desperdicio del mes</div>';
   b += '<div class="card" style="display:flex;flex-direction:column;gap:10px"><h3>Food cost: recetas contra realidad</h3>'+
     '<div><div class="row"><span>Según las recetas</span><b>'+pct(r.fcTeorico)+'</b></div><div class="bar"><i style="width:'+Math.min(100, r.fcTeorico/0.6*100)+'%;background:#5B7FA6"></i></div></div>';
   if (r.fcReal != null){
@@ -600,13 +663,29 @@ V.mes = function(){
   var prods = Object.keys(r.porProd).map(function(c){ return [c, r.porProd[c]]; }).sort(function(a,b){ return b[1]-a[1]; });
   if (prods.length) b += '<div class="sec">Ventas por producto</div><div class="tw"><table><thead><tr><th>Producto</th><th class="r">Unidades</th><th class="r">Para llevar</th><th class="r">Ventas</th></tr></thead><tbody>'+
     prods.map(function(x){ var p = PLC[x[0]]; return '<tr><td>'+esc(p ? p.nombre : x[0])+'</td><td class="r">'+fN.format(x[1])+'</td><td class="r">'+fN.format(r.llevar[x[0]] || 0)+'</td><td class="r">'+money(p ? p.precio * x[1] : 0)+'</td></tr>'; }).join("")+'</tbody></table></div>';
-  b += '<button class="btn go block" type="button" data-act="enviarCC"'+(r.unidades ? '' : ' disabled')+'>Enviar el mes a Cuentas Claras</button>'+
-    '<p class="muted" style="font-size:12px;text-align:center;margin:-4px 0 0">Pasa las ventas por producto, los precios de compra nuevos y el food cost real. Allá se actualizan la ingeniería de menú y el punto de equilibrio.</p>'+
+  b += '<div class="alert info">'+ICON.info+'<div>Las ventas se envían <b>solas a Cuentas Claras</b> cada vez que cierra el día.'+(M.envioT ? ' Último envío: '+new Date(M.envioT).toLocaleString("es-CO",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"})+'.' : '')+'</div></div>'+
+    '<button class="btn ghost block" type="button" data-act="enviarCC"'+(r.unidades ? '' : ' disabled')+'>Enviar ahora a Cuentas Claras</button>'+
     '<button class="btn ghost block" type="button" data-act="cerrarMes">Cerrar '+nombreMes(D.mes)+' y empezar el mes siguiente</button>';
   var hist = (M.historial || []).slice().reverse();
   if (hist.length) b += '<div class="sec">Meses anteriores</div><div class="tw"><table><thead><tr><th>Mes</th><th class="r">Ventas</th><th class="r">FC recetas</th><th class="r">FC real</th><th class="r">Perdido</th></tr></thead><tbody>'+
     hist.map(function(h){ return '<tr><td>'+esc(Mayus(nombreMes(h.mes)))+'</td><td class="r">'+money(h.ventas)+'</td><td class="r">'+pct(h.fcTeorico)+'</td><td class="r">'+(h.fcReal == null ? '—' : pct(h.fcReal))+'</td><td class="r">'+money(h.diferencia)+'</td></tr>'; }).join("")+'</tbody></table></div>';
-  return {h:header(Mayus(nombreMes(D.mes)), "Resumen del mes", null), b:b};
+  return {h:header(Mayus(nombreMes(D.mes)), "Ventas día por día", null), b:b};
+};
+
+// ---------- DETALLE DE UN DÍA ----------
+V.dia = function(){
+  var iso = UI.dia || hoyISO(), d = delDia(iso), cierre = (D.cierres || []).filter(function(c){ return c.fecha === iso; }).pop();
+  var b = '<div class="card"><div class="k">Vendido</div><div class="big">'+money(d.total)+'</div><div class="muted" style="font-size:14px">'+d.pagados.length+' ventas · ticket promedio '+money(d.pagados.length ? d.total/d.pagados.length : 0)+'</div></div>';
+  b += '<div class="card"><h3>Por forma de pago</h3>'+PAGOS.filter(function(p){ return d.porPago[p]; }).map(function(p){ return '<div class="row" style="padding:2px 0"><span>'+esc(p)+'</span><b>'+money(d.porPago[p])+'</b></div>'; }).join("")+
+    (cierre ? '<div class="row" style="padding:6px 0 0;border-top:1px solid var(--line);margin-top:6px"><span>Efectivo contado en el cierre</span><b>'+money(cierre.contado)+'</b></div>'+
+      (Math.abs(cierre.contado - cierre.esperado) >= 1 ? '<div class="row"><span>'+(cierre.contado > cierre.esperado ? 'Sobró' : 'Faltó')+'</span><b class="'+(cierre.contado < cierre.esperado ? 'neg' : '')+'">'+money(Math.abs(cierre.contado - cierre.esperado))+'</b></div>' : '<div class="muted" style="font-size:13px">La caja cuadró exacto.</div>')
+      : '<p class="muted" style="margin:6px 0 0;font-size:13px">Este día no se cerró.</p>')+'</div>';
+  var prods = Object.keys(d.porProd).map(function(c){ return [c, d.porProd[c]]; }).sort(function(a,b){ return b[1]-a[1]; });
+  if (prods.length) b += '<div class="sec">Productos</div><div class="tw"><table><thead><tr><th>Producto</th><th class="r">Unidades</th><th class="r">Ventas</th></tr></thead><tbody>'+
+    prods.map(function(x){ var p = PLC[x[0]]; return '<tr><td>'+esc(p ? p.nombre : x[0])+'</td><td class="r">'+fN.format(x[1])+'</td><td class="r">'+money(p ? p.precio * x[1] : 0)+'</td></tr>'; }).join("")+'</tbody></table></div>';
+  var dw = D.desperdicio.filter(function(x){ return x.fecha === iso; });
+  if (dw.length) b += '<div class="sec">Desperdicio</div><div class="list">'+dw.map(function(x){ return '<div class="it"><div>'+esc(textoDesp(x))+'<small>'+esc(x.motivo)+'</small></div><b>'+money(x.valor)+'</b></div>'; }).join("")+'</div>';
+  return {h:header(Mayus(DIAS_SEM[fechaObj(iso).getDay()])+" "+(+iso.slice(8,10))+" de "+MESES[+iso.slice(5,7)-1], "Detalle del día", "mes"), b:b};
 };
 
 // ---------- ASESOR ----------
@@ -709,6 +788,7 @@ function abrirCierre(){
   $("ci-ok").onclick = function(){
     D.cierres = (D.cierres || []).filter(function(c){ return c.fecha !== hoy; }).concat([{fecha:hoy, t:Date.now(), esperado:ef, contado:parseNum($("ci-efectivo").value), total:d.total, ventas:d.pagados.length}]);
     cerrarDlg("dlg-cierre"); cambio(); toast("Cierre del día guardado.");
+    if (d.unidades) enviarACC(true);
   };
   $("ci-no").onclick = function(){ cerrarDlg("dlg-cierre"); };
   abrirDlg("dlg-cierre");
@@ -749,6 +829,7 @@ document.addEventListener("click", function(e){
     D.desperdicio = D.desperdicio.filter(function(x){ return x.id !== d.borrardesp; }); cambio(); return;
   }
   if (d.cli){ abrirCliente(d.cli); return; }
+  if (d.dia){ UI.dia = d.dia; ir("mes", "dia"); return; }
 });
 document.addEventListener("input", function(e){
   var el = e.target, k = el.dataset && el.dataset.k;
@@ -772,12 +853,15 @@ function renderSoft(){ clearTimeout(softT); softT = setTimeout(render, 350); }
 // =====================================================================
 // Enviar el mes a Cuentas Claras
 // =====================================================================
-function enviarACC(){
-  var r = calcMes(), cambiosPrecio = Object.keys(M.precios || {}).filter(function(c){ return INS[c] && Math.abs(INS[c].cu / (INS[c].cuCC || 1) - 1) > 0.001; });
+var enviando = false;
+function enviarACC(silencioso){
+  if (enviando || !CLOUD.user || !CLOUD.docId || !M || !D) return;
+  var r = calcMes(), cd = calcDias(), cambiosPrecio = Object.keys(M.precios || {}).filter(function(c){ return INS[c] && Math.abs(INS[c].cu / (INS[c].cuCC || 1) - 1) > 0.001; });
   var msg = "Se enviará a Cuentas Claras:\n\n• Ventas de "+nombreMes(D.mes)+" por producto ("+fN.format(r.unidades)+" unidades). Reemplazan las que hay en la pestaña Menú.\n"+
     (cambiosPrecio.length ? "• Precios de compra nuevos de "+cambiosPrecio.length+" insumo(s).\n" : "")+
     "• Food cost real"+(r.fcReal == null ? " (todavía sin conteo)" : ": "+pct(r.fcReal))+" y desperdicio del mes.\n\n¿Continuar?";
-  if (!confirm(msg)) return;
+  if (!silencioso && !confirm(msg)) return;
+  enviando = true;
   var refCC = CLOUD.db.collection("negocios").doc(CLOUD.docId);
   refCC.get().then(function(snap){
     var d = snap.exists ? snap.data() : null; if (!d || !d.json) throw new Error("No se encontraron los datos de Cuentas Claras.");
@@ -786,11 +870,14 @@ function enviarACC(){
     (cc.insumos || []).forEach(function(x){ if (cambiosPrecio.indexOf(x.codigo) > -1 && N(x.cont)) x.precio = Math.round(M.precios[x.codigo] * N(x.cont)); });
     cc.params = cc.params || {}; cc.params.mes = Mayus(nombreMes(D.mes));
     cc.operacion = {mes:D.mes, fecha:Date.now(), ventas:Math.round(r.ventasCaja), unidades:r.unidades, fcTeorico:r.fcTeorico, fcReal:r.fcReal, desperdicio:Math.round(r.desp), sinExplicar:Math.round(r.sinExp), diferencia:Math.round(r.diferencia),
-      despMotivo:r.despMotivo, sinExpIns:r.sinExpIns.filter(function(x){ return x.valor > 0; }).slice(0,8).map(function(x){ return {nombre:x.nombre, valor:Math.round(x.valor)}; })};
+      despMotivo:r.despMotivo, dias:cd.lista.map(function(x){ return {fecha:x.fecha, total:Math.round(x.total), tickets:x.tickets}; }),
+      mejorDia:cd.mejor ? {fecha:cd.mejor.fecha, total:Math.round(cd.mejor.total)} : null, mejorSemana:cd.mejorSem ? {dia:DIAS_SEM[cd.mejorSem.dia], promedio:Math.round(cd.mejorSem.prom)} : null,
+      sinExpIns:r.sinExpIns.filter(function(x){ return x.valor > 0; }).slice(0,8).map(function(x){ return {nombre:x.nombre, valor:Math.round(x.valor)}; })};
     var j = JSON.stringify(cc);
     return refCC.set({json:j, restaurante:(cc.params.restaurante || ""), actualizado:firebase.firestore.FieldValue.serverTimestamp(), editadoPor:(CLOUD.user.email || "") + " (TodoAlDía)"}, {merge:true}).then(function(){ CAT = cc; prepararCatalogo(); });
-  }).then(function(){ render(); toast("Listo: Cuentas Claras quedó con las ventas y el food cost real de "+nombreMes(D.mes)+"."); })
-    .catch(function(e){ toast("No se pudo enviar: "+(e.message || e)); });
+  }).then(function(){ enviando = false; M.envioT = Date.now(); guardar(); render();
+      toast(silencioso ? "Ventas enviadas a Cuentas Claras." : "Listo: Cuentas Claras quedó con las ventas y el food cost real de "+nombreMes(D.mes)+"."); })
+    .catch(function(e){ enviando = false; toast("No se pudo enviar a Cuentas Claras: "+(e.message || e)); });
 }
 
 // =====================================================================
@@ -871,6 +958,9 @@ function cargarMes(id, m){
     D.ventas = D.ventas || []; D.compras = D.compras || []; D.desperdicio = D.desperdicio || []; D.conteo = D.conteo || {}; D.cierres = D.cierres || [];
     CLOUD.lastD = dd && dd.json ? dd.json : "";
     CLOUD.status = "ok"; escucharDocs(); if (CLOUD.admin) escucharLista(); render();
+    // Si quedaron días sin cerrar después del último envío, se envían al abrir la app
+    var hoy = hoyISO();
+    if (!CLOUD.viewing && D.ventas.some(function(t){ return t.fecha < hoy && t.t > N(M.envioT); })) setTimeout(function(){ enviarACC(true); }, 800);
   });
 }
 function pedirConsentimiento(id){
