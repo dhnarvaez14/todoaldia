@@ -180,6 +180,25 @@ footer a{color:var(--navy)}
   <button type="button" class="btn" id="btn-pol-cerrar">Entendido</button>
 </div></dialog>
 
+<dialog id="dlg-dev"><div class="dlg">
+  <h3>Devolución</h3>
+  <p class="muted" style="margin:0" id="dv-venta"></p>
+  <div style="display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:10px">
+    <label class="f">Producto devuelto<select id="dv-prod"></select></label>
+    <label class="f">Cantidad<input class="num" id="dv-qty" inputmode="numeric" value="1"></label>
+  </div>
+  <div class="f">¿Qué se hizo?<div class="pills" role="group" aria-label="Qué se hizo" id="dv-tipo">
+    <button type="button" class="pill" data-dvt="reembolso" aria-pressed="true">Le devolví la plata</button>
+    <button type="button" class="pill" data-dvt="cambio" aria-pressed="false">Le cambié el producto por otro igual</button>
+    <button type="button" class="pill" data-dvt="error" aria-pressed="false">Fue un error al registrar</button>
+  </div></div>
+  <div class="f" id="dv-pago-box">¿Cómo devolvió la plata?<div class="pills" role="group" aria-label="Cómo devolvió la plata" id="dv-pago"></div></div>
+  <div class="f" id="dv-mot-box">Motivo<div class="pills" role="group" aria-label="Motivo" id="dv-mot"></div></div>
+  <label class="f" id="dv-nota-box">Detalle (opcional)<input id="dv-nota" placeholder="Ej.: llegó frío al domicilio"></label>
+  <div class="alert info" id="dv-efecto"></div>
+  <div class="acts"><button type="button" class="btn" id="dv-ok">Guardar</button><button type="button" class="btn ghost" id="dv-no">Cancelar</button></div>
+</div></dialog>
+
 <dialog id="dlg-cierre"><div class="dlg">
   <h3>Cierre del día</h3>
   <div id="cierre-body"></div>
@@ -320,21 +339,34 @@ function cant(q, u){ var v = aMostrar(q, u); return fN.format(Math.round(v*100)/
 // Cálculos del día y del mes
 // =====================================================================
 function ticketTotal(t){ return (t.items || []).reduce(function(a,it){ var p = PLC[it[0]]; return a + (p ? p.precio * it[1] : (it[2] || 0) * it[1]); }, 0); }
+// Devoluciones de un ticket: t.dev = [{id, code, qty, tipo:"reembolso"|"cambio", pago, motivo, nota, valor, t}]
+function reembolsos(t){ return (t.dev || []).filter(function(x){ return x.tipo === "reembolso"; }); }
+function valorReemb(t){ return reembolsos(t).reduce(function(a,x){ return a + N(x.valor); }, 0); }
+function qtyReemb(t, code){ return reembolsos(t).filter(function(x){ return x.code === code; }).reduce(function(a,x){ return a + N(x.qty); }, 0); }
+function ticketNeto(t){ return ticketTotal(t) - valorReemb(t); }
 function ticketUnidades(t){ return (t.items || []).reduce(function(a,it){ return a + it[1]; }, 0); }
 function delDia(iso){
   var ts = D.ventas.filter(function(t){ return t.fecha === iso; });
   var pag = ts.filter(function(t){ return t.estado !== "pendiente"; }), pen = ts.filter(function(t){ return t.estado === "pendiente"; });
-  var r = {tickets:ts, pagados:pag, pendientes:pen, total:0, totalPend:0, porPago:{}, porProd:{}, unidades:0};
-  pag.forEach(function(t){ var v = ticketTotal(t); r.total += v; r.porPago[t.pago] = (r.porPago[t.pago] || 0) + v; });
+  var r = {tickets:ts, pagados:pag, pendientes:pen, total:0, totalPend:0, porPago:{}, porProd:{}, unidades:0, devuelto:0, devPorPago:{}, nDev:0, nCambios:0};
+  pag.forEach(function(t){ var v = ticketTotal(t); r.total += v; r.porPago[t.pago] = (r.porPago[t.pago] || 0) + v;
+    (t.dev || []).forEach(function(x){ if (x.tipo === "reembolso"){ r.total -= N(x.valor); r.devuelto += N(x.valor); r.porPago[x.pago] = (r.porPago[x.pago] || 0) - N(x.valor); r.devPorPago[x.pago] = (r.devPorPago[x.pago] || 0) + N(x.valor); r.nDev++; } else r.nCambios++; }); });
   pen.forEach(function(t){ r.totalPend += ticketTotal(t); });
-  ts.forEach(function(t){ (t.items || []).forEach(function(it){ r.porProd[it[0]] = (r.porProd[it[0]] || 0) + it[1]; r.unidades += it[1]; }); });
+  ts.forEach(function(t){ (t.items || []).forEach(function(it){ var n = it[1] - qtyReemb(t, it[0]); r.porProd[it[0]] = (r.porProd[it[0]] || 0) + n; r.unidades += n; }); });
   return r;
 }
 function calcMes(){
-  var r = {ventasCaja:0, ventasNetas:0, unidades:0, tickets:D.ventas.length, porProd:{}, llevar:{}, costoTeorico:0, desp:0, despMotivo:{}, sinExp:0, sinExpIns:[], contados:0, consumoMes:{}};
+  var r = {ventasCaja:0, ventasNetas:0, unidades:0, tickets:D.ventas.length, porProd:{}, llevar:{}, costoTeorico:0, desp:0, despMotivo:{}, sinExp:0, sinExpIns:[], contados:0, consumoMes:{},
+    dev:{n:0, cambios:0, valor:0, porProd:{}, porMotivo:{}}};
   D.ventas.forEach(function(t){
+    (t.dev || []).forEach(function(x){
+      if (x.tipo === "reembolso"){ r.dev.n++; r.dev.valor += N(x.valor); } else r.dev.cambios++;
+      r.dev.porProd[x.code] = (r.dev.porProd[x.code] || 0) + N(x.qty);
+      var mo = x.motivo || "Sin motivo"; r.dev.porMotivo[mo] = (r.dev.porMotivo[mo] || 0) + N(x.qty);
+      if (x.tipo === "cambio"){ var cc = consumoTicket({items:[[x.code, x.qty]]}); Object.keys(cc).forEach(function(k){ r.consumoMes[k] = (r.consumoMes[k] || 0) + cc[k]; }); }
+    });
     (t.items || []).forEach(function(it){
-      var p = PLC[it[0]], n = it[1];
+      var p = PLC[it[0]], n = it[1] - qtyReemb(t, it[0]);
       r.porProd[it[0]] = (r.porProd[it[0]] || 0) + n; r.unidades += n;
       if (t.llevar) r.llevar[it[0]] = (r.llevar[it[0]] || 0) + n;
       if (p){ r.ventasCaja += p.precio * n; r.ventasNetas += p.neto * n; r.costoTeorico += p.costo * n; if (t.llevar && p.emp) r.costoTeorico += INS[p.emp].cu * n; }
@@ -363,7 +395,8 @@ function calcDias(){
   D.ventas.forEach(function(t){
     if (t.estado === "pendiente") return;
     var d = porDia[t.fecha] || (porDia[t.fecha] = {fecha:t.fecha, total:0, tickets:0, unidades:0});
-    d.total += ticketTotal(t); d.tickets++; d.unidades += ticketUnidades(t);
+    d.total += ticketNeto(t); d.tickets++; d.unidades += ticketUnidades(t) - reembolsos(t).reduce(function(a,x){ return a + N(x.qty); }, 0);
+    d.dev = (d.dev || 0) + (t.dev || []).length;
   });
   var lista = Object.keys(porDia).sort().map(function(k){ return porDia[k]; });
   var sem = [0,1,2,3,4,5,6].map(function(i){ return {dia:i, total:0, n:0}; });
@@ -495,14 +528,27 @@ V.hoy = function(){
   if (bajos.length) b += '<button type="button" data-go-tab="inventario" class="alert warn" style="text-align:left;font:inherit;cursor:pointer">'+ICON.warn+'<div><b>'+bajos.length+(bajos.length === 1 ? ' insumo por agotarse: ' : ' insumos por agotarse: ')+'</b>'+esc(bajos.slice(0,4).map(function(x){ return x.i.nombre.toLowerCase(); }).join(", "))+(bajos.length > 4 ? '…' : '')+'.</div></button>';
   var top = Object.keys(d.porProd).map(function(c){ return [c, d.porProd[c]]; }).sort(function(a,b){ return b[1]-a[1]; }).slice(0,5);
   b += '<div class="card"><h3>Lo más vendido hoy</h3>'+(top.length ? top.map(function(x){ return '<div class="row" style="padding:3px 0"><span>'+esc(PLC[x[0]] ? PLC[x[0]].nombre : x[0])+'</span><b>'+x[1]+'</b></div>'; }).join("") : '<p class="muted" style="margin:0">Todavía no hay ventas hoy.</p>')+'</div>';
-  var ultimas = d.tickets.slice(-6).reverse();
-  if (ultimas.length) b += '<div class="sec">Últimas ventas</div><div class="list">'+ultimas.map(function(t){
-    return '<div class="it"><div>'+esc(resumenItems(t))+'<small>'+horaCorta(t.t)+' · '+esc(t.estado === "pendiente" ? "Pedido abierto" : t.pago)+(t.llevar ? ' · para llevar' : '')+(t.cliente ? ' · '+esc(t.cliente) : '')+'</small></div><div style="display:flex;gap:8px;align-items:center"><b>'+money(ticketTotal(t))+'</b><button class="btn sm del" type="button" data-anular="'+t.id+'" aria-label="Anular venta">Anular</button></div></div>'; }).join("")+'</div>';
+  var ultimas = d.tickets.slice().reverse(), nUlt = UI.verTodas ? ultimas.length : 6;
+  if (d.nDev || d.nCambios) b += '<div class="alert warn">'+ICON.warn+'<div><b>Devoluciones de hoy:</b> '+(d.nDev ? d.nDev+' con devolución de dinero ('+money(d.devuelto)+')' : '')+(d.nDev && d.nCambios ? ' y ' : '')+(d.nCambios ? d.nCambios+(d.nCambios === 1 ? ' cambio' : ' cambios')+' de producto' : '')+'.</div></div>';
+  if (ultimas.length) b += '<div class="sec">'+(UI.verTodas ? 'Ventas de hoy' : 'Últimas ventas')+'</div><div class="list">'+ultimas.slice(0, nUlt).map(filaVenta).join("")+'</div>'+
+    (ultimas.length > 6 ? '<button class="btn sm ghost" type="button" data-act="verTodas">'+(UI.verTodas ? 'Ver solo las últimas' : 'Ver las '+ultimas.length+' ventas de hoy')+'</button>' : '');
   var cierre = (D.cierres || []).filter(function(c){ return c.fecha === hoy; }).pop();
   b += '<a class="btn go block" href="#" data-go-tab="vender">+ Registrar venta</a>'+
     '<button class="btn ghost block" type="button" data-act="cerrarDia">'+(cierre ? 'Día cerrado · ver o rehacer el cierre' : 'Cerrar el día y enviar a Cuentas Claras')+'</button>';
   return {h:header(esc(nombreNegocio()), fechaLarga(hoy)), b:b};
 };
+function filaVenta(t){
+  var devs = t.dev || [], vr = valorReemb(t), pend = t.estado === "pendiente";
+  var monto = vr ? '<span class="muted" style="text-decoration:line-through;font-weight:600;font-size:13px;margin-right:4px">'+money(ticketTotal(t))+'</span><b>'+money(ticketNeto(t))+'</b>' : '<b>'+money(ticketTotal(t))+'</b>';
+  var detDev = devs.map(function(x){ var p = PLC[x.code];
+    return '<small style="color:#8A5300">'+(x.tipo === "reembolso" ? 'Devolución: ' : 'Cambio: ')+fN.format(x.qty)+' '+esc(p ? p.nombre : x.code)+(x.tipo === "reembolso" ? ' · '+money(x.valor)+' en '+esc(x.pago) : ' por otro igual')+(x.motivo ? ' · '+esc(x.motivo.toLowerCase()) : '')+
+      ' · <button type="button" class="btn sm ghost" style="min-height:30px;padding:0 8px;font-size:12px" data-deshacer="'+t.id+'|'+x.id+'">Deshacer</button></small>'; }).join("");
+  return '<div class="it" style="align-items:flex-start"><div style="min-width:0">'+esc(resumenItems(t))+(devs.length ? '<span class="badge" style="background:#FFF1C2;color:#7A4A00">Devolución</span>' : '')+
+    '<small>'+horaCorta(t.t)+' · '+esc(pend ? "Pedido abierto" : t.pago)+(t.llevar ? ' · para llevar' : '')+(t.cliente ? ' · '+esc(t.cliente) : '')+'</small>'+detDev+'</div>'+
+    '<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex:none"><span>'+monto+'</span><div style="display:flex;gap:6px">'+
+    (pend ? '' : '<button class="btn sm ghost" type="button" data-devolver="'+t.id+'">Devolución</button>')+
+    '<button class="btn sm del" type="button" data-anular="'+t.id+'" aria-label="Anular venta">Anular</button></div></div></div>';
+}
 function resumenItems(t){ return (t.items || []).map(function(it){ return it[1] + " " + (PLC[it[0]] ? PLC[it[0]].nombre : it[0]); }).join(", "); }
 
 // ---------- VENDER ----------
@@ -588,7 +634,7 @@ V.desperdicio = function(){
     '<div class="row"><span class="muted">Valor de lo perdido</span><b class="neg">'+money(valorDesp(w))+'</b></div></div>'+
     '<button class="btn block" type="button" data-act="guardarDesp"'+(parseNum(w.qty) > 0 ? '' : ' disabled')+'>Guardar</button>';
   var hoy = hoyISO(), hoyL = D.desperdicio.filter(function(x){ return x.fecha === hoy; }).reverse();
-  if (hoyL.length) b += '<div class="sec">Hoy</div><div class="list">'+hoyL.map(function(x){ return '<div class="it"><div>'+esc(textoDesp(x))+'<small>'+esc(x.motivo)+(x.nota ? ' · «'+esc(x.nota)+'»' : '')+'</small></div><div style="display:flex;gap:8px;align-items:center"><b>'+money(x.valor)+'</b><button class="btn sm del" type="button" data-borrardesp="'+x.id+'" aria-label="Borrar">Borrar</button></div></div>'; }).join("")+'</div>';
+  if (hoyL.length) b += '<div class="sec">Hoy</div><div class="list">'+hoyL.map(function(x){ return '<div class="it"><div>'+esc(textoDesp(x))+'<small>'+esc(x.motivo)+(x.nota ? ' · «'+esc(x.nota)+'»' : '')+'</small></div><div style="display:flex;gap:8px;align-items:center"><b>'+money(x.valor)+'</b>'+(x.devDe ? '<span class="badge">Desde la venta</span>' : '<button class="btn sm del" type="button" data-borrardesp="'+x.id+'" aria-label="Borrar">Borrar</button>')+'</div></div>'; }).join("")+'</div>';
   var r = calcMes(), mot = Object.keys(r.despMotivo).sort(function(a,b){ return r.despMotivo[b] - r.despMotivo[a]; });
   b += '<div class="card"><h3>En '+nombreMes(D.mes)+': '+money(r.desp)+'</h3>'+(mot.length ? mot.map(function(m){ return '<div class="row" style="padding:2px 0"><span>'+esc(m)+'</span><b>'+money(r.despMotivo[m])+'</b></div>'; }).join("") : '<p class="muted" style="margin:0">Nada registrado este mes.</p>')+'</div>';
   return {h:header("Registrar desperdicio", "Lo que se pierde y ya sabe por qué", "inventario"), b:b};
@@ -640,8 +686,15 @@ V.mes = function(){
       var cierre = (D.cierres || []).some(function(c){ return c.fecha === d.fecha; });
       return '<button type="button" class="it tap" data-dia="'+d.fecha+'"><span><b>'+esc(Mayus(DIAS_SEM[fechaObj(d.fecha).getDay()]))+' '+(+d.fecha.slice(8,10))+'</b>'+
         (cierre ? '<span class="badge ok">Cerrado</span>' : d.fecha === hoy ? '<span class="badge">Hoy</span>' : '<span class="badge">Sin cierre</span>')+
-        '<small>'+d.tickets+' ventas · '+fN.format(d.unidades)+' productos</small></span><b'+(cd.meta && d.total >= cd.meta ? ' style="color:var(--green-ink)"' : '')+'>'+money(d.total)+'</b></button>'; }).join("")+'</div>';
+        '<small>'+d.tickets+' ventas · '+fN.format(d.unidades)+' productos'+(d.dev ? ' · '+d.dev+(d.dev === 1 ? ' devolución' : ' devoluciones') : '')+'</small></span><b'+(cd.meta && d.total >= cd.meta ? ' style="color:var(--green-ink)"' : '')+'>'+money(d.total)+'</b></button>'; }).join("")+'</div>';
   } else b += '<p class="empty">Todavía no hay ventas cobradas este mes.</p>';
+  if (r.dev.n || r.dev.cambios){
+    var dp = Object.keys(r.dev.porProd).sort(function(a,c){ return r.dev.porProd[c] - r.dev.porProd[a]; }).slice(0,4);
+    var dm = Object.keys(r.dev.porMotivo).sort(function(a,c){ return r.dev.porMotivo[c] - r.dev.porMotivo[a]; }).slice(0,4);
+    b += '<div class="card"><h3>Devoluciones del mes</h3><div class="row"><span>Con devolución de dinero</span><b>'+r.dev.n+' · '+money(r.dev.valor)+'</b></div><div class="row"><span>Cambios por otro igual</span><b>'+r.dev.cambios+'</b></div>'+
+      '<div class="g2" style="margin-top:10px"><div><div class="k">Qué se devuelve</div>'+dp.map(function(c){ return '<div style="font-size:14px">'+esc(PLC[c] ? PLC[c].nombre : c)+' · <b>'+fN.format(r.dev.porProd[c])+'</b></div>'; }).join("")+'</div>'+
+      '<div><div class="k">Por qué</div>'+dm.map(function(m){ return '<div style="font-size:14px">'+esc(m)+' · <b>'+fN.format(r.dev.porMotivo[m])+'</b></div>'; }).join("")+'</div></div></div>';
+  }
   b += '<div class="sec" style="margin-top:8px">Inventario y desperdicio del mes</div>';
   b += '<div class="card" style="display:flex;flex-direction:column;gap:10px"><h3>Food cost: recetas contra realidad</h3>'+
     '<div><div class="row"><span>Según las recetas</span><b>'+pct(r.fcTeorico)+'</b></div><div class="bar"><i style="width:'+Math.min(100, r.fcTeorico/0.6*100)+'%;background:#5B7FA6"></i></div></div>';
@@ -683,6 +736,8 @@ V.dia = function(){
   var prods = Object.keys(d.porProd).map(function(c){ return [c, d.porProd[c]]; }).sort(function(a,b){ return b[1]-a[1]; });
   if (prods.length) b += '<div class="sec">Productos</div><div class="tw"><table><thead><tr><th>Producto</th><th class="r">Unidades</th><th class="r">Ventas</th></tr></thead><tbody>'+
     prods.map(function(x){ var p = PLC[x[0]]; return '<tr><td>'+esc(p ? p.nombre : x[0])+'</td><td class="r">'+fN.format(x[1])+'</td><td class="r">'+money(p ? p.precio * x[1] : 0)+'</td></tr>'; }).join("")+'</tbody></table></div>';
+  var conDev = d.tickets.filter(function(t){ return (t.dev || []).length; });
+  if (conDev.length) b += '<div class="sec">Ventas con devolución</div><div class="list">'+conDev.map(filaVenta).join("")+'</div>';
   var dw = D.desperdicio.filter(function(x){ return x.fecha === iso; });
   if (dw.length) b += '<div class="sec">Desperdicio</div><div class="list">'+dw.map(function(x){ return '<div class="it"><div>'+esc(textoDesp(x))+'<small>'+esc(x.motivo)+'</small></div><b>'+money(x.valor)+'</b></div>'; }).join("")+'</div>';
   return {h:header(Mayus(DIAS_SEM[fechaObj(iso).getDay()])+" "+(+iso.slice(8,10))+" de "+MESES[+iso.slice(5,7)-1], "Detalle del día", "mes"), b:b};
@@ -729,6 +784,7 @@ var acciones = {
   cobrar: function(){ registrarTicket("pagado"); },
   pedido: function(){ registrarTicket("pendiente"); },
   vaciar: function(){ UI.cart = {}; render(); },
+  verTodas: function(){ UI.verTodas = !UI.verTodas; render(); },
   editMin: function(){ UI.editMin = !UI.editMin; render(); },
   guardarCompra: function(){
     var c = UI.compra, i = INS[c.code]; if (!i) return;
@@ -774,11 +830,73 @@ var acciones = {
 };
 function mesNuevo(m){ return {mes:m, ventas:[], compras:[], desperdicio:[], conteo:{}, cierres:[], inicio:JSON.parse(JSON.stringify(M.stock || {}))}; }
 
+// Devoluciones
+var MOT_DEV = ["Estaba frío","Demoró mucho","No era lo que pidió","Mal sabor o mal preparado","Otro"];
+function abrirDevolucion(id){
+  var t = D.ventas.find(function(x){ return x.id === id; }); if (!t) return;
+  var st = {tipo:"reembolso", pago:t.pago, motivo:MOT_DEV[0]};
+  $("dv-venta").textContent = "Venta de las " + horaCorta(t.t) + ": " + resumenItems(t) + " · " + money(ticketTotal(t));
+  $("dv-prod").innerHTML = (t.items || []).map(function(it){ var p = PLC[it[0]]; return '<option value="'+esc(it[0])+'">'+esc(p ? p.nombre : it[0])+' (vendidos: '+it[1]+')</option>'; }).join("");
+  $("dv-qty").value = "1"; $("dv-nota").value = "";
+  function pintar(){
+    document.querySelectorAll("#dv-tipo .pill").forEach(function(b){ b.setAttribute("aria-pressed", b.dataset.dvt === st.tipo); });
+    $("dv-pago").innerHTML = PAGOS.map(function(x){ return '<button type="button" class="pill" data-dvp="'+esc(x)+'" aria-pressed="'+(st.pago === x)+'">'+esc(x)+'</button>'; }).join("");
+    $("dv-mot").innerHTML = MOT_DEV.map(function(x){ return '<button type="button" class="pill" data-dvm="'+esc(x)+'" aria-pressed="'+(st.motivo === x)+'">'+esc(x)+'</button>'; }).join("");
+    $("dv-pago-box").hidden = st.tipo !== "reembolso"; $("dv-mot-box").hidden = st.tipo === "error"; $("dv-nota-box").hidden = st.tipo === "error";
+    var code = $("dv-prod").value, it = (t.items || []).find(function(x){ return x[0] === code; }), p = PLC[code];
+    var max = it ? it[1] - (t.dev || []).filter(function(x){ return x.code === code; }).reduce(function(a,x){ return a + N(x.qty); }, 0) : 0;
+    var q = Math.max(0, Math.min(max, parseInt($("dv-qty").value, 10) || 0)), precio = it ? (it[2] || (p ? p.precio : 0)) : 0;
+    $("dv-ok").disabled = !q && st.tipo !== "error";
+    $("dv-efecto").innerHTML = ICON.info + '<div>' + (st.tipo === "reembolso"
+      ? 'Se restan <b>'+money(precio * q)+'</b> de las ventas de hoy y del '+esc(st.pago.toLowerCase())+' esperado en el cierre. Los insumos quedan gastados y el costo ('+money((p ? p.costo : 0) * q)+') queda como desperdicio por devolución.'
+      : st.tipo === "cambio" ? 'La venta no cambia. Se descuentan del inventario los insumos del producto nuevo, y el devuelto ('+money((p ? p.costo : 0) * q)+') queda como desperdicio por devolución.'
+      : 'Se anula <b>toda la venta</b> y los insumos vuelven al inventario, como si nunca se hubiera registrado.') +
+      (max < (it ? it[1] : 0) && st.tipo !== "error" ? ' <br>Ya se devolvieron '+((it ? it[1] : 0) - max)+' de este producto en esta venta.' : '') + '</div>';
+    return {code:code, q:q, precio:precio, p:p};
+  }
+  $("dv-tipo").onclick = function(e){ var b = e.target.closest("[data-dvt]"); if (b){ st.tipo = b.dataset.dvt; pintar(); } };
+  $("dv-pago").onclick = function(e){ var b = e.target.closest("[data-dvp]"); if (b){ st.pago = b.dataset.dvp; pintar(); } };
+  $("dv-mot").onclick = function(e){ var b = e.target.closest("[data-dvm]"); if (b){ st.motivo = b.dataset.dvm; pintar(); } };
+  $("dv-prod").onchange = pintar; $("dv-qty").oninput = pintar;
+  $("dv-ok").onclick = function(){
+    var x = pintar();
+    if (st.tipo === "error"){ cerrarDlg("dlg-dev"); anularVenta(t, true); return; }
+    if (!x.q) return;
+    var nota = $("dv-nota").value.trim().slice(0,80);
+    var dv = {id:uid(), t:Date.now(), code:x.code, qty:x.q, tipo:st.tipo, pago:st.pago, motivo:st.motivo, nota:nota, valor:st.tipo === "reembolso" ? x.precio * x.q : 0};
+    t.dev = (t.dev || []).concat([dv]);
+    if (st.tipo === "cambio") aplicarConsumo(consumoTicket({items:[[x.code, x.q]]}), 1);
+    D.desperdicio.push({id:uid(), fecha:hoyISO(), tipo:"plato", code:x.code, qty:x.q, motivo:"Devolución del cliente", nota:(st.motivo !== "Otro" ? st.motivo : "") + (nota ? (st.motivo !== "Otro" ? " · " : "") + nota : ""), valor:Math.round((x.p ? x.p.costo : 0) * x.q), devDe:t.id + "|" + dv.id});
+    cerrarDlg("dlg-dev"); cambio();
+    toast(st.tipo === "reembolso" ? "Devolución guardada: se restaron " + money(dv.valor) + " de las ventas." : "Cambio guardado.");
+  };
+  $("dv-no").onclick = function(){ cerrarDlg("dlg-dev"); };
+  pintar(); abrirDlg("dlg-dev");
+}
+function deshacerDevolucion(tid, did){
+  var t = D.ventas.find(function(x){ return x.id === tid; }); if (!t) return;
+  var dv = (t.dev || []).find(function(x){ return x.id === did; }); if (!dv) return;
+  if (!confirm("¿Deshacer esta " + (dv.tipo === "reembolso" ? "devolución de " + money(dv.valor) : "devolución con cambio") + "?")) return;
+  if (dv.tipo === "cambio") aplicarConsumo(consumoTicket({items:[[dv.code, dv.qty]]}), -1);
+  t.dev = t.dev.filter(function(x){ return x.id !== did; });
+  D.desperdicio = D.desperdicio.filter(function(w){ return w.devDe !== tid + "|" + did; });
+  cambio(); toast("Devolución deshecha.");
+}
+function anularVenta(t, sinPreguntar){
+  if (!sinPreguntar && !confirm("¿Anular esta venta de "+money(ticketTotal(t))+"? Es para cuando se registró por error: los insumos vuelven al inventario.")) return;
+  aplicarConsumo(consumoTicket(t), -1);
+  (t.dev || []).forEach(function(x){ if (x.tipo === "cambio") aplicarConsumo(consumoTicket({items:[[x.code, x.qty]]}), -1); });
+  D.desperdicio = D.desperdicio.filter(function(w){ return !w.devDe || w.devDe.split("|")[0] !== t.id; });
+  D.ventas = D.ventas.filter(function(x){ return x.id !== t.id; });
+  cambio(); toast("Venta anulada.");
+}
+
 // Cierre del día (cuadre de caja)
 function abrirCierre(){
   var hoy = hoyISO(), d = delDia(hoy), ef = d.porPago["Efectivo"] || 0;
   $("cierre-body").innerHTML = '<div class="list">'+PAGOS.map(function(p){ return '<div class="it"><span>'+esc(p)+'</span><b>'+money(d.porPago[p] || 0)+'</b></div>'; }).join("")+
-    '<div class="it"><b>Total cobrado</b><b>'+money(d.total)+'</b></div></div>'+
+    (d.devuelto ? '<div class="it"><span>Devoluciones de dinero ('+d.nDev+')</span><b class="neg">− '+money(d.devuelto)+'</b></div>' : '')+
+    '<div class="it"><b>Total cobrado'+(d.devuelto ? ' (ya descontadas)' : '')+'</b><b>'+money(d.total)+'</b></div></div>'+
     (d.pendientes.length ? '<div class="alert warn" style="margin-top:10px">'+ICON.warn+'<div>Quedan <b>'+d.pendientes.length+' pedidos abiertos</b> por '+money(d.totalPend)+'. Cóbrelos o anúlelos antes de cerrar.</div></div>' : '');
   var prev = (D.cierres || []).filter(function(c){ return c.fecha === hoy; }).pop();
   $("ci-efectivo").value = prev ? fN.format(prev.contado) : "";
@@ -786,7 +904,7 @@ function abrirCierre(){
     var x = c - ef; $("ci-dif").innerHTML = Math.abs(x) < 1 ? '<b style="color:var(--green-ink)">La caja cuadra exacto.</b>' : x > 0 ? '<b>Sobran '+money(x)+'</b> frente a lo vendido en efectivo ('+money(ef)+').' : '<b class="neg">Faltan '+money(-x)+'</b> frente a lo vendido en efectivo ('+money(ef)+').'; };
   $("ci-efectivo").oninput = dif; dif();
   $("ci-ok").onclick = function(){
-    D.cierres = (D.cierres || []).filter(function(c){ return c.fecha !== hoy; }).concat([{fecha:hoy, t:Date.now(), esperado:ef, contado:parseNum($("ci-efectivo").value), total:d.total, ventas:d.pagados.length}]);
+    D.cierres = (D.cierres || []).filter(function(c){ return c.fecha !== hoy; }).concat([{fecha:hoy, t:Date.now(), esperado:ef, contado:parseNum($("ci-efectivo").value), total:d.total, ventas:d.pagados.length, devuelto:d.devuelto}]);
     cerrarDlg("dlg-cierre"); cambio(); toast("Cierre del día guardado.");
     if (d.unidades) enviarACC(true);
   };
@@ -817,12 +935,9 @@ document.addEventListener("click", function(e){
     tk.pago = PAGOS[Math.max(0, Math.min(3, (parseInt(p, 10) || 1) - 1))]; tk.estado = "pagado"; tk.cobrado = Date.now();
     cambio(); toast("Pedido cobrado · "+money(ticketTotal(tk))); return;
   }
-  if (d.anular){
-    var tk2 = D.ventas.find(function(x){ return x.id === d.anular; }); if (!tk2) return;
-    if (!confirm("¿Anular esta venta de "+money(ticketTotal(tk2))+"? Los insumos vuelven al inventario.")) return;
-    aplicarConsumo(consumoTicket(tk2), -1); D.ventas = D.ventas.filter(function(x){ return x.id !== d.anular; });
-    cambio(); toast("Venta anulada."); return;
-  }
+  if (d.anular){ var tk2 = D.ventas.find(function(x){ return x.id === d.anular; }); if (tk2) anularVenta(tk2); return; }
+  if (d.devolver){ abrirDevolucion(d.devolver); return; }
+  if (d.deshacer){ var pr = d.deshacer.split("|"); deshacerDevolucion(pr[0], pr[1]); return; }
   if (d.borrardesp){
     var w = D.desperdicio.find(function(x){ return x.id === d.borrardesp; }); if (!w) return;
     if (w.tipo === "plato") aplicarConsumo(consumoTicket({items:[[w.code, w.qty]]}), -1); else { var o = {}; o[w.code] = w.qty; aplicarConsumo(o, -1); }
@@ -871,6 +986,8 @@ function enviarACC(silencioso){
     cc.params = cc.params || {}; cc.params.mes = Mayus(nombreMes(D.mes));
     cc.operacion = {mes:D.mes, fecha:Date.now(), ventas:Math.round(r.ventasCaja), unidades:r.unidades, fcTeorico:r.fcTeorico, fcReal:r.fcReal, desperdicio:Math.round(r.desp), sinExplicar:Math.round(r.sinExp), diferencia:Math.round(r.diferencia),
       despMotivo:r.despMotivo, dias:cd.lista.map(function(x){ return {fecha:x.fecha, total:Math.round(x.total), tickets:x.tickets}; }),
+      devoluciones:{n:r.dev.n, cambios:r.dev.cambios, valor:Math.round(r.dev.valor), productos:Object.keys(r.dev.porProd).map(function(c){ return {nombre:PLC[c] ? PLC[c].nombre : c, qty:r.dev.porProd[c]}; }).sort(function(a,b){ return b.qty - a.qty; }).slice(0,5),
+        motivos:Object.keys(r.dev.porMotivo).map(function(m){ return {motivo:m, qty:r.dev.porMotivo[m]}; }).sort(function(a,b){ return b.qty - a.qty; }).slice(0,5)},
       mejorDia:cd.mejor ? {fecha:cd.mejor.fecha, total:Math.round(cd.mejor.total)} : null, mejorSemana:cd.mejorSem ? {dia:DIAS_SEM[cd.mejorSem.dia], promedio:Math.round(cd.mejorSem.prom)} : null,
       sinExpIns:r.sinExpIns.filter(function(x){ return x.valor > 0; }).slice(0,8).map(function(x){ return {nombre:x.nombre, valor:Math.round(x.valor)}; })};
     var j = JSON.stringify(cc);
